@@ -1,0 +1,4 @@
+simulation_mode: true
+# TODO: ajouter la liste des equipements
+snmp_community: "public"
+threshold_temp: 30.0
