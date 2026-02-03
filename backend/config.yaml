@@ -1,4 +1,13 @@
 simulation_mode: true
-# TODO: ajouter la liste des equipements
 snmp_community: "public"
-threshold_temp: 30.0
+devices:
+  - name: "Switch Core"
+    ip: "192.168.1.10"
+    oid_status: "1.3.6.1.2.1.1.1.0"
+  - name: "Routeur principal"
+    ip: "192.168.1.1"
+    oid_status: "1.3.6.1.2.1.1.1.0"
+sensor:
+  type: "dht22"
+  gpio_pin: 4
+threshold_temp: 25.0
