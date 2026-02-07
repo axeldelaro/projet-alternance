@@ -13,4 +13,8 @@ class DeviceStatusResponse(BaseModel):
     timestamp: datetime
     model_config = ConfigDict(from_attributes=True)
 
-# TODO: ajouter LogResponse
+class LogResponse(BaseModel):
+    timestamp: datetime
+    message: str
+    level: str
+    model_config = ConfigDict(from_attributes=True)
