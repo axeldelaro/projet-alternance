@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from typing import List
 from database import get_db
 import models, schemas
 
@@ -12,4 +13,6 @@ def get_latest(db: Session = Depends(get_db)):
         return models.SensorData(temperature=0.0, humidity=0.0)
     return latest
 
-# TODO: ajouter /history
+@router.get("/history", response_model=List[schemas.SensorDataResponse])
+def get_history(limit: int = 20, db: Session = Depends(get_db)):
+    return db.query(models.SensorData).order_by(models.SensorData.timestamp.desc()).limit(limit).all()
