@@ -1,6 +1,5 @@
 const API_BASE = "http://localhost:8000/api";
 
-// Recupere la derniere mesure capteur
 export const fetchLatestSensors = async () => {
     const res = await fetch(`${API_BASE}/sensors/latest`);
     if (!res.ok) throw new Error("Erreur sensors");
@@ -13,4 +12,8 @@ export const fetchDevices = async () => {
     return res.json();
 };
 
-// TODO: fetchLogs
+export const fetchLogs = async () => {
+    const res = await fetch(`${API_BASE}/logs`);
+    if (!res.ok) throw new Error("Erreur logs");
+    return res.json();
+};
