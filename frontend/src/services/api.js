@@ -17,3 +17,10 @@ export const fetchLogs = async () => {
     if (!res.ok) throw new Error("Erreur logs");
     return res.json();
 };
+
+export const fetchHosts = async () => {
+    const res = await fetch(`${API_BASE}/hosts`);
+    if (!res.ok) throw new Error("Erreur hosts");
+    return res.json();
+};
+

@@ -22,3 +22,18 @@ class Log(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     message = Column(String)
     level = Column(String)  # "info", "warning", "error"
+
+class DiscoveredHost(Base):
+    """
+    Représente un équipement découvert automatiquement par scan ARP.
+    Alimenté par le module collectors/network_scanner.py.
+    """
+    __tablename__ = "discovered_hosts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ip = Column(String, unique=True, index=True)       # Adresse IP de l'hôte
+    mac = Column(String)                               # Adresse MAC (identifiant matériel)
+    hostname = Column(String, default="unknown")       # Nom DNS résolu si disponible
+    status = Column(String, default="up")             # "up" ou "down"
+    first_seen = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow)
