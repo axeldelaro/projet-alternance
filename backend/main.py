@@ -3,6 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import Base, engine
 from routes import sensors, devices, logs, hosts
 
+from apscheduler.schedulers.background import BackgroundScheduler
+import asyncio
+from collectors.network_scanner import run_network_scan
+
 # Crée toutes les tables SQLite au démarrage
 Base.metadata.create_all(bind=engine)
 
@@ -11,6 +15,25 @@ app = FastAPI(
     description="API de supervision réseau et environnement",
     version="1.0.0"
 )
+
+# Planificateur de tâches en arrière-plan
+scheduler = BackgroundScheduler()
+
+# Fonction wrapper pour exécuter le scan dans une boucle d'événement (si besoin de async)
+def scheduled_network_scan():
+    try:
+        run_network_scan()
+    except Exception as e:
+        print(f"Erreur lors du scan programmé : {e}")
+
+@app.on_event("startup")
+def start_scheduler():
+    scheduler.add_job(scheduled_network_scan, 'interval', seconds=10)
+    scheduler.start()
+
+@app.on_event("shutdown")
+def shutdown_scheduler():
+    scheduler.shutdown()
 
 # CORS : autorise le frontend Vite (localhost:5173)
 app.add_middleware(
