@@ -1,13 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Activity } from 'lucide-react';
-import TemperatureCard from './components/TemperatureCard';
-import HumidityCard from './components/HumidityCard';
+import { TemperatureCard, HumidityCard, AlertBanner } from './components/SensorWidgets';
 import NetworkTable from './components/NetworkTable';
 import LogsPanel from './components/LogsPanel';
-import AlertBanner from './components/AlertBanner';
 import HostsTable from './components/HostsTable';
-import { fetchLatestSensors, fetchDevices, fetchLogs, fetchHosts } from './services/api';
 
+// ---------------------------------------------------------------------------
+// API — appels vers le backend FastAPI
+// ---------------------------------------------------------------------------
+const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin.replace(/:5173/, ':8000')) + "/api";
+
+const fetchLatestSensors = () => fetch(`${API_BASE}/sensors/latest`).then(r => { if (!r.ok) throw new Error("Erreur sensors"); return r.json(); });
+const fetchDevices = () => fetch(`${API_BASE}/devices`).then(r => { if (!r.ok) throw new Error("Erreur devices"); return r.json(); });
+const fetchLogs = () => fetch(`${API_BASE}/logs`).then(r => { if (!r.ok) throw new Error("Erreur logs"); return r.json(); });
+const fetchHosts = () => fetch(`${API_BASE}/hosts`).then(r => { if (!r.ok) throw new Error("Erreur hosts"); return r.json(); });
+
+// ---------------------------------------------------------------------------
+// Application principale
+// ---------------------------------------------------------------------------
 export default function App() {
   const [sensors, setSensors] = useState({ temperature: 0, humidity: 0 });
   const [devices, setDevices] = useState([]);
@@ -31,65 +40,63 @@ export default function App() {
       setHosts(hostData);
       setLastUpdate(new Date());
     } catch (err) {
-      console.error("Erreur lors du rafraichissement:", err);
+      console.error("Erreur rafraîchissement:", err);
     }
   };
 
   useEffect(() => {
     loadData();
-    const intervalId = setInterval(loadData, REFRESH_INTERVAL);
-    return () => clearInterval(intervalId);
+    const id = setInterval(loadData, REFRESH_INTERVAL);
+    return () => clearInterval(id);
   }, []);
 
   return (
-    <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-10 space-y-8">
-      {/* Header */}
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-200">
-            <Activity size={32} />
-          </div>
-          <div>
-            <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight">Supervision RRG</h1>
-            <p className="text-slate-500 font-medium mt-1">Dashboard Andon Centralisé</p>
-          </div>
+    <div className="h-screen overflow-hidden flex flex-col bg-gray-50 font-mono">
+
+      {/* ── Header ── */}
+      <header className="shrink-0 border-b border-gray-200 bg-white px-5 py-3 flex items-center justify-between">
+        <div>
+          <h1 className="text-base font-bold text-gray-800 tracking-tight">
+            📡 Supervision RRG
+          </h1>
+          <p className="text-xs text-gray-400">Dashboard de supervision réseau</p>
         </div>
-        {lastUpdate && (
-          <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100 text-sm font-medium text-slate-500">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-            Dernière sync : {lastUpdate.toLocaleTimeString('fr-FR')}
-          </div>
-        )}
+        <span className="text-xs text-gray-400">
+          {lastUpdate
+            ? <span>⟳ {lastUpdate.toLocaleTimeString('fr-FR')}</span>
+            : <span className="italic">connexion...</span>
+          }
+        </span>
       </header>
 
-      {/* Alerte température */}
-      <AlertBanner temperature={sensors.temperature} threshold={25.0} />
+      {/* ── Alerte ── */}
+      <div className="shrink-0 px-4 pt-3">
+        <AlertBanner temperature={sensors.temperature} threshold={25.0} />
+      </div>
 
-      <main className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Colonne gauche : Capteurs + Logs */}
-        <div className="lg:col-span-1 space-y-8 flex flex-col">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-6">
-            <TemperatureCard temperature={sensors.temperature} threshold={25.0} />
-            <HumidityCard humidity={sensors.humidity} />
-          </div>
-          <div className="flex-1 min-h-[300px]">
+      {/* ── Corps principal ── */}
+      <div className="flex-1 min-h-0 grid grid-cols-12 gap-3 p-3">
+
+        {/* Colonne gauche */}
+        <div className="col-span-3 flex flex-col gap-3 min-h-0">
+          <TemperatureCard temperature={sensors.temperature} threshold={25.0} />
+          <HumidityCard humidity={sensors.humidity} />
+          <div className="flex-1 min-h-0">
             <LogsPanel logs={logs} />
           </div>
         </div>
 
-        {/* Colonne droite : Équipements SNMP configurés */}
-        <div className="lg:col-span-2">
-          <NetworkTable devices={devices} />
+        {/* Colonne droite */}
+        <div className="col-span-9 flex flex-col gap-3 min-h-0">
+          <div className="shrink-0">
+            <NetworkTable devices={devices} />
+          </div>
+          <div className="flex-1 min-h-0">
+            <HostsTable hosts={hosts} onRefresh={loadData} />
+          </div>
         </div>
-      </main>
 
-      {/* Tableau pleine largeur : Machines découvertes automatiquement par scan ARP */}
-      <section>
-        <HostsTable hosts={hosts} onRefresh={loadData} />
-      </section>
+      </div>
     </div>
   );
 }
