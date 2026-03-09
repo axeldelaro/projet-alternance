@@ -1,16 +1,31 @@
 """
 db.py — Couche données complète :
+  - Configuration YAML (config.yaml)
   - Connexion SQLAlchemy (engine, SessionLocal, Base, get_db)
   - Modèles ORM (SensorData, DeviceStatus, Log, DiscoveredHost)
   - Schémas Pydantic de réponse
   - Utilitaire de log BDD (db_log)
 """
 import logging
+import yaml
+from pathlib import Path
 from datetime import datetime
 
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 from pydantic import BaseModel, ConfigDict
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+config: dict = {}
+try:
+    _config_path = Path(__file__).parent / "config.yaml"
+    with open(_config_path, "r") as _f:
+        config = yaml.safe_load(_f) or {}
+except FileNotFoundError:
+    pass  # config vide par défaut, les valeurs par défaut gèrent ce cas
 
 # ---------------------------------------------------------------------------
 # Connexion

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { TemperatureCard, HumidityCard, AlertBanner } from './components/SensorWidgets';
-import NetworkTable from './components/NetworkTable';
-import LogsPanel from './components/LogsPanel';
+import { LogsPanel, NetworkTable } from './components/NetworkWidgets';
 import HostsTable from './components/HostsTable';
 
 // ---------------------------------------------------------------------------
@@ -56,9 +55,7 @@ export default function App() {
       {/* ── Header ── */}
       <header className="shrink-0 border-b border-gray-200 bg-white px-5 py-3 flex items-center justify-between">
         <div>
-          <h1 className="text-base font-bold text-gray-800 tracking-tight">
-            📡 Supervision RRG
-          </h1>
+          <h1 className="text-base font-bold text-gray-800 tracking-tight">📡 Supervision RRG</h1>
           <p className="text-xs text-gray-400">Dashboard de supervision réseau</p>
         </div>
         <span className="text-xs text-gray-400">

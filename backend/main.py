@@ -4,9 +4,9 @@ from db import Base, engine
 from routes import sensors_router, devices_router, logs_router, hosts_router
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from collectors.network_scanner import run_network_scan
-from collectors.mdns_listener import start_mdns_listener, stop_mdns_listener
-from collectors.collectors import collect_snmp_data, read_sensor_data
+from collectors import run_network_scan, start_mdns_listener, stop_mdns_listener
+from collectors import collect_snmp_data, read_sensor_data
+
 
 # Crée toutes les tables SQLite au démarrage
 Base.metadata.create_all(bind=engine)

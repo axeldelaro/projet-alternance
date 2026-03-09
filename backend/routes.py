@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict
 from db import get_db, SensorData, DeviceStatus, Log, DiscoveredHost
 from db import SensorDataResponse, DeviceStatusResponse, LogResponse
 from db import db_log
-from collectors.network_scanner import ping_host
+from collectors import ping_host
 
 # ---------------------------------------------------------------------------
 # /api/sensors
