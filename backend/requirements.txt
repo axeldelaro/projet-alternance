@@ -10,3 +10,4 @@ zeroconf
 mac-vendor-lookup
 RPi.GPIO; sys_platform == 'linux'
 gpiozero; sys_platform == 'linux'
+adafruit-circuitpython-dht; sys_platform == 'linux'
