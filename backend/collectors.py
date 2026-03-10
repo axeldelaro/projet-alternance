@@ -1,37 +1,37 @@
 import random, subprocess, socket, ipaddress, platform, re, time, logging, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any  # noqa: F401
 from sqlalchemy import func  # type: ignore[import-untyped]
 from db import SessionLocal, SensorData, DeviceStatus, DiscoveredHost, db_log, config
 
 logger = logging.getLogger(__name__)
 
 try:
-    from zeroconf import Zeroconf, ServiceBrowser, ServiceListener
+    from zeroconf import Zeroconf, ServiceBrowser, ServiceListener  # type: ignore[import-untyped]
     ZEROCONF_AVAILABLE = True
 except ImportError:
     ZEROCONF_AVAILABLE = False
 
 try:
-    from scapy.all import ARP, Ether, srp
+    from scapy.all import ARP, Ether, srp  # type: ignore[import-untyped]
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
 
 try:
-    from mac_vendor_lookup import MacLookup
+    from mac_vendor_lookup import MacLookup  # type: ignore[import-untyped]
     _mac_lookup = MacLookup(); MAC_LOOKUP_AVAILABLE = True
 except ImportError:
     MAC_LOOKUP_AVAILABLE = False
 
 SNMP_AVAILABLE = False
 try:
-    from pysnmp.hlapi import getCmd, SnmpEngine, CommunityData, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity
+    from pysnmp.hlapi import getCmd, SnmpEngine, CommunityData, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity  # type: ignore[import-untyped]
     SNMP_AVAILABLE = True
 except ImportError:
     try:
-        from pysnmp.hlapi.v1arch import getCmd, SnmpEngine, CommunityData, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity
+        from pysnmp.hlapi.v1arch import getCmd, SnmpEngine, CommunityData, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity  # type: ignore[import-untyped]
         SNMP_AVAILABLE = True
     except ImportError:
         pass
@@ -41,8 +41,9 @@ SIMULATION_MODE = config.get("simulation_mode", True)
 # mDNS
 _mdns_cache, _cache_lock = {}, threading.Lock()
 
-class _MdnsListener(ServiceListener if ZEROCONF_AVAILABLE else object):
-    def add_service(self, zc, type_, name):
+class _MdnsListener:
+    """Listener mDNS — fonctionne avec ou sans zeroconf installé."""
+    def add_service(self, zc: Any, type_: str, name: str) -> None:
         try:
             info = zc.get_service_info(type_, name, timeout=1000)
             if not info: return
@@ -52,8 +53,8 @@ class _MdnsListener(ServiceListener if ZEROCONF_AVAILABLE else object):
                     with _cache_lock:
                         _mdns_cache.setdefault(ip, friendly)
         except Exception: pass
-    def remove_service(self, *a): pass
-    def update_service(self, zc, t, n): self.add_service(zc, t, n)
+    def remove_service(self, *a: Any) -> None: pass
+    def update_service(self, zc: Any, t: str, n: str) -> None: self.add_service(zc, t, n)
 
 _zc = None
 def start_mdns_listener():
@@ -158,14 +159,32 @@ def _scan_network():
 
 _last_subnets: set = set()
 
+def _hosts_belong_to_subnets(hosts: list, subnets: set) -> bool:
+    """Retourne True si au moins un hôte appartient aux subnets donnés."""
+    nets = [ipaddress.IPv4Network(s, strict=False) for s in subnets]
+    return any(
+        any(ipaddress.IPv4Address(h.ip) in net for net in nets)
+        for h in hosts
+    )
+
 def run_network_scan():
     global _last_subnets
     discovered, subnets = _scan_network()
     db = SessionLocal()
-    if _last_subnets and subnets != _last_subnets:
-        db.query(DiscoveredHost).delete(); db.commit()
-        db_log("Changement de réseau — hôtes réinitialisés.", "info")
-    _last_subnets = subnets; db.close()
+    try:
+        existing = db.query(DiscoveredHost).all()
+        # Cas 1 : réseau changé pendant que le backend tournait
+        subnet_changed = bool(_last_subnets) and subnets != _last_subnets
+        # Cas 2 : redémarrage après changement de réseau (_last_subnets vide)
+        #          → aucun hôte existant n'appartient au réseau actuel
+        startup_foreign = (not _last_subnets and bool(existing)
+                           and not _hosts_belong_to_subnets(existing, subnets))
+        if subnet_changed or startup_foreign:
+            db.query(DiscoveredHost).delete(); db.commit()
+            db_log("Changement de réseau — hôtes réinitialisés.", "info")
+    finally:
+        _last_subnets = subnets
+        db.close()
 
     db = SessionLocal()
     try:
@@ -173,13 +192,13 @@ def run_network_scan():
         for h in discovered:
             ex = db.query(DiscoveredHost).filter_by(ip=h["ip"]).first()
             if ex:
-                ex.last_seen, ex.status, ex.mac = datetime.utcnow(), "up", h["mac"]
-                if h["hostname"] != "unknown" or ex.hostname == "unknown": ex.hostname = h["hostname"]
+                ex.last_seen, ex.status, ex.mac = datetime.now(timezone.utc), "up", h["mac"]  # type: ignore[assignment]
+                if h["hostname"] != "unknown" or str(ex.hostname) == "unknown": ex.hostname = h["hostname"]  # type: ignore[assignment]
             else:
                 db.add(DiscoveredHost(**h, status="up"))
                 db_log(f"Nouvelle machine : {h['ip']}", "info")
         for host in db.query(DiscoveredHost).all():
-            if host.ip not in found and host.status == "up": host.status = "down"
+            if host.ip not in found and str(host.status) == "up": host.status = "down"  # type: ignore[assignment]
         db.commit()
     except Exception as e: db_log(f"Erreur BDD: {e}", "error")
     finally: db.close()
@@ -207,7 +226,7 @@ def _init_gpio():
     _gpio_ok = True
     if platform.system().lower() != "linux": return False
     try:
-        import adafruit_dht, board
+        import adafruit_dht, board  # type: ignore[import-untyped]
         _dht = adafruit_dht.DHT22({4:board.D4, 17:board.D17, 27:board.D27, 22:board.D22}.get(GPIO_PIN, board.D4), use_pulseio=False)
         return True
     except Exception: return False
@@ -268,7 +287,7 @@ def run_all_checks():
     try:
         sub = db.query(DeviceStatus.device_name, func.max(DeviceStatus.timestamp).label("m")).group_by(DeviceStatus.device_name).subquery()
         for d in db.query(DeviceStatus).join(sub, (DeviceStatus.device_name == sub.c.device_name) & (DeviceStatus.timestamp == sub.c.m)).all():
-            if d.status == "down" and _should_alert(f"dev_{d.device_name}", 300): db_log(f"{d.device_name} injoignable", "error")
-            elif d.status == "up": _alert_times.pop(f"dev_{d.device_name}", None)
+            if str(d.status) == "down" and _should_alert(f"dev_{d.device_name}", 300): db_log(f"{d.device_name} injoignable", "error")
+            elif str(d.status) == "up": _alert_times.pop(f"dev_{d.device_name}", None)
     except Exception as e: logger.error(e)
     finally: db.close()

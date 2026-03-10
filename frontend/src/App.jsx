@@ -4,6 +4,8 @@ import './index.css';
 
 const API = (import.meta.env.VITE_API_URL ?? window.location.origin.replace(/:5173/, ':8000')) + "/api";
 const get = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject());
+// Force l'interprétation UTC : ajoute 'Z' si le timestamp n'a pas d'info de fuseau
+const utcDate = s => new Date(s.endsWith('Z') || s.includes('+') ? s : s + 'Z');
 
 function AlertBanner({ temp }) {
     if (temp <= 25) return null;
@@ -23,6 +25,7 @@ function HostsTable({ hosts, onRefresh }) {
     const [pinging, setPinging] = useState({});
     const [pingAll, setPingAll] = useState(false);
     const [pingResult, setPingResult] = useState(null);
+    const [clearing, setClearing] = useState(false);
 
     const doPing = async (ip) => {
         setPinging(p => ({ ...p, [ip]: true }));
@@ -40,12 +43,20 @@ function HostsTable({ hosts, onRefresh }) {
 
     const exportLogs = async () => {
         const logs = await get(`${API}/logs?limit=1000`);
-        const txt = logs.map(l => `${new Date(l.timestamp).toLocaleString('fr-FR')} [${l.level.toUpperCase()}] ${l.message}`).join('\n');
+        const txt = logs.map(l => `${utcDate(l.timestamp).toLocaleString('fr-FR')} [${l.level.toUpperCase()}] ${l.message}`).join('\n');
         const a = Object.assign(document.createElement('a'), {
             href: URL.createObjectURL(new Blob([txt], { type: 'text/plain' })),
             download: `logs-${new Date().toISOString().slice(0, 10)}.txt`
         });
         a.click();
+    };
+
+    const doClear = async () => {
+        if (!confirm('Vider la liste des machines ? Un nouveau scan se lancera automatiquement.')) return;
+        setClearing(true);
+        try { await fetch(`${API}/hosts`, { method: 'DELETE' }); onRefresh?.(); }
+        catch (e) {}
+        finally { setClearing(false); }
     };
 
     const up = hosts.filter(h => h.status === 'up').length;
@@ -59,6 +70,7 @@ function HostsTable({ hosts, onRefresh }) {
                     {pingResult && !pingResult.error && <span className="ping-result">{pingResult.up}/{pingResult.total} repondent</span>}
                     <button className="btn" onClick={exportLogs}>Exporter logs</button>
                     <button className="btn" onClick={doPingAll} disabled={pingAll || !hosts.length}>{pingAll ? 'en cours...' : 'Ping All'}</button>
+                    <button className="btn btn-danger" onClick={doClear} disabled={clearing || !hosts.length}>{clearing ? '...' : 'Vider'}</button>
                 </span>
             </div>
             <div className="hosts-scroll">
@@ -71,7 +83,7 @@ function HostsTable({ hosts, onRefresh }) {
                                 <td className="text-muted">{h.mac}</td>
                                 <td>{h.hostname}</td>
                                 <td><span className={`status-${h.status}`}>{h.status}</span></td>
-                                <td className="text-muted">{new Date(h.last_seen).toLocaleTimeString('fr-FR')}</td>
+                                <td className="text-muted">{utcDate(h.last_seen).toLocaleTimeString('fr-FR')}</td>
                                 <td><button className="btn-sm" onClick={() => doPing(h.ip)} disabled={pinging[h.ip]}>{pinging[h.ip] ? '...' : 'ping'}</button></td>
                             </tr>
                         ))}

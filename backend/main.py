@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -44,7 +44,7 @@ def root():
 @app.get("/api/sensors/latest", response_model=SensorDataResponse)
 def get_latest(db: Session = Depends(get_db)):
     s = db.query(SensorData).order_by(SensorData.timestamp.desc()).first()
-    return s or SensorData(temperature=0.0, humidity=0.0, timestamp=datetime.utcnow())
+    return s or SensorData(temperature=0.0, humidity=0.0, timestamp=datetime.now(timezone.utc))
 
 @app.get("/api/sensors/history", response_model=List[SensorDataResponse])
 def get_history(limit: int = 20, db: Session = Depends(get_db)):
@@ -69,6 +69,15 @@ def ping_one(ip: str, db: Session = Depends(get_db)):
     host.status = status; db.commit()
     db_log(f"Ping {ip} ({host.hostname}) : {status.upper()}", "info")
     return {"ip": ip, "hostname": host.hostname, "status": status}
+
+@app.delete("/api/hosts")
+def clear_hosts(db: Session = Depends(get_db)):
+    import collectors
+    collectors._last_subnets = set()
+    count = db.query(DiscoveredHost).delete()
+    db.commit()
+    db_log(f"Hôtes réinitialisés manuellement ({count} supprimés).", "info")
+    return {"deleted": count}
 
 @app.post("/api/hosts/ping-all")
 def ping_all(db: Session = Depends(get_db)):

@@ -1,6 +1,6 @@
 import logging, yaml
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 from pydantic import BaseModel, ConfigDict
@@ -25,21 +25,21 @@ class SensorData(Base):
     id = Column(Integer, primary_key=True)
     temperature = Column(Float)
     humidity = Column(Float)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class DeviceStatus(Base):
     __tablename__ = "device_status"
     id = Column(Integer, primary_key=True)
     device_name = Column(String)
     status = Column(String)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class Log(Base):
     __tablename__ = "logs"
     id = Column(Integer, primary_key=True)
     message = Column(String)
     level = Column(String, default="info")
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class DiscoveredHost(Base):
     __tablename__ = "discovered_hosts"
@@ -48,8 +48,8 @@ class DiscoveredHost(Base):
     mac = Column(String)
     hostname = Column(String)
     status = Column(String, default="up")
-    first_seen = Column(DateTime, default=datetime.utcnow)
-    last_seen = Column(DateTime, default=datetime.utcnow)
+    first_seen = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    last_seen  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 _cfg = ConfigDict(from_attributes=True)
 

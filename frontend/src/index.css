@@ -43,5 +43,8 @@ td             { padding: 4px 10px; border-top: 1px solid #eee; }
 /* Boutons */
 .btn    { padding: 3px 10px; font-size: 12px; font-family: monospace; border: 1px solid #999; border-radius: 3px; cursor: pointer; background: #f5f5f5; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-danger { border-color: #dc2626; color: #dc2626; }
+.btn-danger:hover:not(:disabled) { background: #fee2e2; }
 .btn-sm { padding: 2px 7px; font-size: 11px; font-family: monospace; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; background: #fff; }
 .btn-sm:disabled { opacity: 0.4; }
+
