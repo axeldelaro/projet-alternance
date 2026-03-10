@@ -24,14 +24,13 @@ except ImportError:
     MAC_LOOKUP_AVAILABLE = False
 
 SNMP_AVAILABLE = False
-for _mod in ("pysnmp.hlapi", "pysnmp.hlapi.v1arch"):
+try:
+    from pysnmp.hlapi import getCmd, SnmpEngine, CommunityData, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity
+    SNMP_AVAILABLE = True
+except ImportError:
     try:
-        from importlib import import_module
-        _m = import_module(_mod)
-        getCmd = _m.getCmd; SnmpEngine = _m.SnmpEngine; CommunityData = _m.CommunityData
-        UdpTransportTarget = _m.UdpTransportTarget; ContextData = _m.ContextData
-        ObjectType = _m.ObjectType; ObjectIdentity = _m.ObjectIdentity
-        SNMP_AVAILABLE = True; break
+        from pysnmp.hlapi.v1arch import getCmd, SnmpEngine, CommunityData, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity
+        SNMP_AVAILABLE = True
     except ImportError:
         pass
 
