@@ -1,31 +1,10 @@
-"""
-collectors.py — Découverte réseau & collecte de données environnementales.
-
-Contient :
-  1. Listener mDNS  : écoute passive des annonces Bonjour/NSD sur le LAN
-  2. Scanner réseau : ping sweep + lecture ARP → découverte automatique des hôtes
-  3. Capteur DHT22  : lecture température/humidité (simulation ou GPIO réel)
-  4. Collecte SNMP  : interrogation des équipements réseau configurés
-"""
-
-# ============================================================================
-# Imports
-# ============================================================================
-import random
-import subprocess
-import socket
-import ipaddress
-import platform
-import re
-import threading
+import random, subprocess, socket, ipaddress, platform, re, time, logging, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-
 from db import SessionLocal, SensorData, DeviceStatus, DiscoveredHost, db_log, config
 
-# ---------------------------------------------------------------------------
-# Bibliothèques optionnelles
-# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+
 try:
     from zeroconf import Zeroconf, ServiceBrowser, ServiceListener
     ZEROCONF_AVAILABLE = True
@@ -39,437 +18,250 @@ except ImportError:
     SCAPY_AVAILABLE = False
 
 try:
-    from mac_vendor_lookup import MacLookup, VendorNotFoundError
-    _mac_lookup = MacLookup()
-    MAC_LOOKUP_AVAILABLE = True
+    from mac_vendor_lookup import MacLookup
+    _mac_lookup = MacLookup(); MAC_LOOKUP_AVAILABLE = True
 except ImportError:
     MAC_LOOKUP_AVAILABLE = False
 
 SNMP_AVAILABLE = False
-try:
-    from pysnmp.hlapi import (
-        getCmd, SnmpEngine, CommunityData, UdpTransportTarget,
-        ContextData, ObjectType, ObjectIdentity
-    )
-    SNMP_AVAILABLE = True
-except ImportError:
+for _mod in ("pysnmp.hlapi", "pysnmp.hlapi.v1arch"):
     try:
-        from pysnmp.hlapi.v1arch import (
-            getCmd, SnmpEngine, CommunityData, UdpTransportTarget,
-            ContextData, ObjectType, ObjectIdentity
-        )
-        SNMP_AVAILABLE = True
+        from importlib import import_module
+        _m = import_module(_mod)
+        getCmd = _m.getCmd; SnmpEngine = _m.SnmpEngine; CommunityData = _m.CommunityData
+        UdpTransportTarget = _m.UdpTransportTarget; ContextData = _m.ContextData
+        ObjectType = _m.ObjectType; ObjectIdentity = _m.ObjectIdentity
+        SNMP_AVAILABLE = True; break
     except ImportError:
-        db_log("pysnmp non disponible — collecte SNMP désactivée.", "warning")
-
-SIMULATION_MODE = config.get("simulation_mode", True)
-if not SIMULATION_MODE:
-    try:
-        import RPi.GPIO as GPIO
-    except ImportError:
-        db_log("RPi.GPIO absent, passage en mode simulation.", "warning")
-        SIMULATION_MODE = True
-
-
-# ============================================================================
-# 1. LISTENER mDNS (Bonjour / NSD)
-# ============================================================================
-
-# Cache IP → nom d'hôte résolu par mDNS
-_mdns_cache: dict[str, str] = {}
-_cache_lock = threading.Lock()
-
-SERVICES_TO_BROWSE = [
-    "_device-info._tcp.local.",    # iOS (iPhone, iPad)
-    "_http._tcp.local.",            # Appareils généralistes
-    "_googlecast._tcp.local.",      # Chromecast / Android TV
-    "_androidtvremote2._tcp.local.", # Android TV
-    "_companion-link._tcp.local.",  # Apple Watch / Continuity
-    "_rdlink._tcp.local.",          # Apple
-]
-
-
-class _MdnsListener(ServiceListener if ZEROCONF_AVAILABLE else object):
-    """Reçoit les événements mDNS et met à jour le cache IP → nom."""
-
-    def add_service(self, zc, type_: str, name: str) -> None:
-        try:
-            info = zc.get_service_info(type_, name, timeout=1000)
-            if not info:
-                return
-            for addr_bytes in info.addresses:
-                ip = socket.inet_ntoa(addr_bytes)
-                friendly = name.replace(f".{type_}", "").replace("._device-info._tcp.local.", "").strip(". ")
-                if friendly and ip:
-                    with _cache_lock:
-                        if ip not in _mdns_cache:
-                            _mdns_cache[ip] = friendly
-                            db_log(f"mDNS : {ip} → {friendly}", "info")
-        except Exception:
-            pass
-
-    def remove_service(self, zc, type_, name): pass
-    def update_service(self, zc, type_, name): self.add_service(zc, type_, name)
-
-
-_zeroconf_instance = None
-_browsers: list = []
-
-
-def start_mdns_listener():
-    """Démarre l'écoute mDNS en arrière-plan (appelé au démarrage du serveur)."""
-    global _zeroconf_instance, _browsers
-    if not ZEROCONF_AVAILABLE:
-        db_log("zeroconf non disponible — mDNS désactivé. pip install zeroconf", "warning")
-        return
-    try:
-        _zeroconf_instance = Zeroconf()
-        listener = _MdnsListener()
-        for service in SERVICES_TO_BROWSE:
-            _browsers.append(ServiceBrowser(_zeroconf_instance, service, listener))
-        db_log("Listener mDNS démarré — écoute Bonjour/NSD.", "info")
-    except Exception as e:
-        db_log(f"Erreur démarrage mDNS: {e}", "warning")
-
-
-def stop_mdns_listener():
-    """Arrête proprement le listener mDNS."""
-    global _zeroconf_instance
-    if _zeroconf_instance:
-        try:
-            _zeroconf_instance.close()
-        except Exception:
-            pass
-
-
-def _get_mdns_name(ip: str) -> str | None:
-    """Retourne le nom mDNS connu pour une IP (depuis le cache)."""
-    with _cache_lock:
-        return _mdns_cache.get(ip)
-
-
-# ============================================================================
-# 2. SCANNER RÉSEAU (ping sweep + ARP)
-# ============================================================================
-
-def _is_randomized_mac(mac: str) -> bool:
-    """Détecte une MAC localement administrée (iOS 14+ / Android 10+)."""
-    try:
-        first_byte = int(mac.replace(":", "").replace("-", "")[:2], 16)
-        return bool(first_byte & 0x02)
-    except Exception:
-        return False
-
-
-def _resolve_vendor(mac: str) -> str:
-    """Retourne le fabricant via OUI. Signale les MACs randomisées."""
-    if not mac:
-        return ""
-    if _is_randomized_mac(mac):
-        return "Mobile (MAC aléatoire)"
-    if not MAC_LOOKUP_AVAILABLE:
-        return ""
-    try:
-        return _mac_lookup.lookup(mac)
-    except Exception:
-        return ""
-
-
-def _resolve_hostname(ip: str, mac: str = "") -> str:
-    """
-    Résolution de nom en cascade :
-    1. DNS inverse (PTR)
-    2. NetBIOS (nbtstat -A) — Windows
-    3. Cache mDNS (Bonjour/NSD)
-    4. Fabricant OUI (MAC)
-    5. Fallback 'unknown'
-    """
-    try:
-        name = socket.gethostbyaddr(ip)[0]
-        if name and name != ip:
-            return name
-    except (socket.herror, socket.gaierror):
         pass
 
-    if platform.system().lower() == "windows":
+SIMULATION_MODE = config.get("simulation_mode", True)
+
+# mDNS
+_mdns_cache, _cache_lock = {}, threading.Lock()
+
+class _MdnsListener(ServiceListener if ZEROCONF_AVAILABLE else object):
+    def add_service(self, zc, type_, name):
         try:
-            output = subprocess.check_output(
-                ["nbtstat", "-A", ip],
-                encoding="cp850", errors="ignore", timeout=1, stderr=subprocess.DEVNULL
-            )
-            match = re.search(r"^\s*([A-Za-z0-9_\-]+)\s+<00>\s+UNIQUE", output, re.MULTILINE)
-            if match:
-                return match.group(1).strip()
-        except Exception:
-            pass
+            info = zc.get_service_info(type_, name, timeout=1000)
+            if not info: return
+            for b in info.addresses:
+                ip, friendly = socket.inet_ntoa(b), name.replace(f".{type_}", "").strip(". ")
+                if ip and friendly:
+                    with _cache_lock:
+                        _mdns_cache.setdefault(ip, friendly)
+        except Exception: pass
+    def remove_service(self, *a): pass
+    def update_service(self, zc, t, n): self.add_service(zc, t, n)
 
-    mdns_name = _get_mdns_name(ip)
-    if mdns_name:
-        return mdns_name
-
-    vendor = _resolve_vendor(mac)
-    if vendor:
-        return vendor
-
-    return "unknown"
-
-
-def ping_host(ip: str, timeout: int = 1) -> bool:
-    """Ping ICMP natif (compatible Windows et Linux)."""
+_zc = None
+def start_mdns_listener():
+    global _zc
+    if not ZEROCONF_AVAILABLE: return
     try:
-        if platform.system().lower() == "windows":
-            result = subprocess.run(
-                ["ping", "-n", "1", "-w", str(timeout * 1000), ip],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-        else:
-            result = subprocess.run(
-                ["ping", "-c", "1", "-W", str(timeout), ip],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-        return result.returncode == 0
-    except Exception:
-        return False
+        _zc = Zeroconf(); l = _MdnsListener()
+        for s in ("_device-info._tcp.local.", "_http._tcp.local.", "_googlecast._tcp.local."):
+            ServiceBrowser(_zc, s, l)
+    except Exception: pass
 
+def stop_mdns_listener():
+    if _zc:
+        try: _zc.close()
+        except Exception: pass
 
-def _get_local_ip() -> str:
-    """Retourne l'IP de l'interface réseau principale (trick UDP fictif vers 8.8.8.8)."""
+# Réseau
+IS_WIN = platform.system().lower() == "windows"
+
+def ping_host(ip, timeout=1):
+    try:
+        args = ["ping", "-n", "1", "-w", str(timeout*1000), ip] if IS_WIN else ["ping", "-c", "1", "-W", str(timeout), ip]
+        return subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    except Exception: return False
+
+def _get_subnets():
+    subnets = set()
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except Exception:
-        return None
-
-
-def _get_local_subnets() -> list:
-    """Détecte automatiquement tous les sous-réseaux locaux actifs."""
-    subnets = set()
-
-    primary_ip = _get_local_ip()
-    if primary_ip and not primary_ip.startswith("127."):
-        network = ipaddress.IPv4Network(f"{primary_ip}/24", strict=False)
-        subnets.add(str(network))
-        db_log(f"Sous-réseau principal : {network} (IP locale : {primary_ip})", "info")
-
+            ip = s.getsockname()[0]
+            if not ip.startswith("127."): subnets.add(str(ipaddress.IPv4Network(f"{ip}/24", strict=False)))
+    except Exception: pass
     try:
-        is_windows = platform.system().lower() == "windows"
-        if is_windows:
-            output = subprocess.check_output(["ipconfig"], encoding="cp850", errors="ignore")
-            for match in re.finditer(r"IPv4[^:]*:\s*([\d\.]+)", output, re.IGNORECASE):
-                ip_str = match.group(1).strip()
-                try:
-                    ip = ipaddress.IPv4Address(ip_str)
-                    if ip.is_private and not ip.is_loopback:
-                        net = ipaddress.IPv4Network(f"{ip_str}/24", strict=False)
-                        if str(net) not in subnets:
-                            subnets.add(str(net))
-                            db_log(f"Interface supplémentaire : {net}", "info")
-                except ValueError:
-                    pass
-        else:
-            output = subprocess.check_output(["ip", "addr", "show"], encoding="utf-8", errors="ignore")
-            for match in re.finditer(r"inet\s+([\d\.]+)/(\d+)", output):
-                ip_str, prefix = match.group(1), int(match.group(2))
-                try:
-                    ip = ipaddress.IPv4Address(ip_str)
-                    if ip.is_private and not ip.is_loopback:
-                        net = ipaddress.IPv4Network(f"{ip_str}/{prefix}", strict=False)
-                        if str(net) not in subnets:
-                            subnets.add(str(net))
-                except ValueError:
-                    pass
-    except Exception as e:
-        db_log(f"Erreur détection interfaces : {e}", "warning")
+        out = subprocess.check_output(["ipconfig"] if IS_WIN else ["ip","addr","show"],
+                                      encoding="cp850" if IS_WIN else "utf-8", errors="ignore")
+        pat = r"IPv4[^:]*:\s*([\d\.]+)" if IS_WIN else r"inet\s+([\d\.]+)/(\d+)"
+        for m in re.finditer(pat, out, re.IGNORECASE):
+            try:
+                a = ipaddress.IPv4Address(m.group(1).strip())
+                if a.is_private and not a.is_loopback:
+                    prefix = 24 if IS_WIN else int(m.group(2))
+                    subnets.add(str(ipaddress.IPv4Network(f"{a}/{prefix}", strict=False)))
+            except Exception: pass
+    except Exception: pass
+    return list(subnets) or ["192.168.1.0/24"]
 
-    if not subnets:
-        db_log("Aucun sous-réseau détecté, fallback 192.168.1.0/24", "warning")
-        return ["192.168.1.0/24"]
-    return list(subnets)
-
-
-def _ping_sweep_windows(subnet: str, timeout_ms: int = 300) -> list:
-    """Ping sweep parallèle pour peupler le cache ARP Windows."""
+def _resolve_hostname(ip, mac=""):
     try:
-        network = ipaddress.IPv4Network(subnet, strict=False)
-        hosts = [str(ip) for ip in network.hosts()]
+        n = socket.gethostbyaddr(ip)[0]
+        if n and n != ip: return n
+    except Exception: pass
+    if IS_WIN:
+        try:
+            out = subprocess.check_output(["nbtstat","-A",ip], encoding="cp850", errors="ignore", timeout=1, stderr=subprocess.DEVNULL)
+            m = re.search(r"^\s*([A-Za-z0-9_\-]+)\s+<00>\s+UNIQUE", out, re.MULTILINE)
+            if m: return m.group(1).strip()
+        except Exception: pass
+    with _cache_lock:
+        if ip in _mdns_cache: return _mdns_cache[ip]
+    if mac and MAC_LOOKUP_AVAILABLE:
+        try:
+            if int(mac.replace(":","").replace("-","")[:2], 16) & 0x02: return "Mobile"
+            return _mac_lookup.lookup(mac)
+        except Exception: pass
+    return "unknown"
 
-        def _ping_one(ip_str):
-            r = subprocess.run(
-                ["ping", "-n", "1", "-w", str(timeout_ms), ip_str],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            return ip_str if r.returncode == 0 else None
-
-        alive = []
-        with ThreadPoolExecutor(max_workers=64) as executor:
-            for result in as_completed({executor.submit(_ping_one, ip): ip for ip in hosts}):
-                if result.result():
-                    alive.append(result.result())
-        return alive
-    except Exception as e:
-        db_log(f"Erreur ping sweep ({subnet}): {e}", "warning")
-        return []
-
-
-def _scan_network() -> list:
-    """
-    Scan du réseau local. Retourne une liste de dicts {ip, mac, hostname}.
-    - Windows : ping sweep parallèle → lecture table ARP
-    - Linux/RPi : broadcast ARP Scapy
-    """
-    subnets = _get_local_subnets()
-    discovered = {}
-    is_windows = platform.system().lower() == "windows"
-
+def _scan_network():
+    subnets, discovered = _get_subnets(), {}
     for subnet in subnets:
-        db_log(f"Scan de {subnet}...", "info")
-
-        if is_windows or not SCAPY_AVAILABLE:
+        db_log(f"Scan {subnet}...", "info")
+        if IS_WIN or not SCAPY_AVAILABLE:
             try:
-                alive_ips = _ping_sweep_windows(subnet)
-                db_log(f"{len(alive_ips)} hôte(s) ont répondu au ping sur {subnet}", "info")
-                output = subprocess.check_output(["arp", "-a"], encoding="cp850", errors="ignore")
-                pattern = re.compile(
-                    r"^\s*([\d\.]+)\s+([0-9a-fA-F\-]+)\s+(dynamic|dynamique)",
-                    re.IGNORECASE | re.MULTILINE
-                )
-                subnet_net = ipaddress.IPv4Network(subnet, strict=False)
-                for ip, mac, _ in pattern.findall(output):
+                net = ipaddress.IPv4Network(subnet, strict=False)
+                def _p(ip): return ip if subprocess.run(["ping","-n","1","-w","300",ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0 else None
+                with ThreadPoolExecutor(max_workers=64) as ex: list(as_completed({ex.submit(_p, str(h)): h for h in net.hosts()}))
+                out = subprocess.check_output(["arp","-a"], encoding="cp850", errors="ignore")
+                for ip, mac, _ in re.findall(r"^\s*([\d\.]+)\s+([0-9a-fA-F\-]+)\s+(dynamic|dynamique)", out, re.IGNORECASE|re.MULTILINE):
                     try:
-                        ip_obj = ipaddress.IPv4Address(ip)
-                    except ValueError:
-                        continue
-                    if ip_obj not in subnet_net or ip.endswith(".255") or ip_obj.is_multicast:
-                        continue
-                    if ip not in discovered:
-                        discovered[ip] = {"ip": ip, "mac": mac.replace("-", ":").lower(), "hostname": "unknown"}
-            except Exception as e:
-                db_log(f"Erreur scan ARP Windows ({subnet}): {e}", "error")
+                        obj = ipaddress.IPv4Address(ip)
+                        if obj in net and not ip.endswith(".255") and not obj.is_multicast:
+                            discovered[ip] = {"ip": ip, "mac": mac.replace("-",":").lower(), "hostname": "unknown"}
+                    except Exception: pass
+            except Exception as e: db_log(f"Erreur scan ({subnet}): {e}", "error")
         else:
             try:
-                answered = srp(Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=subnet), timeout=3, verbose=False)[0]
-                for _, received in answered:
-                    ip, mac = received.psrc, received.hwsrc
-                    if ip not in discovered:
-                        discovered[ip] = {"ip": ip, "mac": mac, "hostname": "unknown"}
-            except PermissionError:
-                db_log("Permission refusée pour scapy. Lancez avec sudo.", "error")
-            except Exception as e:
-                db_log(f"Erreur scan Scapy ({subnet}): {e}", "error")
+                for _, r in srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=subnet), timeout=3, verbose=False)[0]:
+                    discovered[r.psrc] = {"ip": r.psrc, "mac": r.hwsrc, "hostname": "unknown"}
+            except Exception as e: db_log(f"Erreur scapy: {e}", "error")
 
     result = list(discovered.values())
+    with ThreadPoolExecutor(max_workers=32) as ex:
+        list(as_completed([ex.submit(lambda h: h.update(hostname=_resolve_hostname(h["ip"], h["mac"])) or h, h) for h in result]))
+    db_log(f"Scan terminé : {len(result)} hôte(s).", "info")
+    return result, set(subnets)
 
-    def _resolve(host_dict):
-        host_dict["hostname"] = _resolve_hostname(host_dict["ip"], host_dict["mac"])
-
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        for _ in as_completed([executor.submit(_resolve, h) for h in result]):
-            pass
-
-    db_log(f"Scan terminé : {len(result)} hôte(s) découvert(s).", "info")
-    return result
-
-
-def _update_discovered_hosts(discovered: list):
-    """Met à jour la base de données avec les hôtes détectés."""
-    db = SessionLocal()
-    try:
-        for host in discovered:
-            existing = db.query(DiscoveredHost).filter_by(ip=host["ip"]).first()
-            if existing:
-                existing.last_seen = datetime.utcnow()
-                existing.status = "up"
-                existing.mac = host["mac"]
-                if host["hostname"] != "unknown" or existing.hostname == "unknown":
-                    existing.hostname = host["hostname"]
-            else:
-                db.add(DiscoveredHost(ip=host["ip"], mac=host["mac"], hostname=host["hostname"], status="up"))
-                db_log(f"Nouvelle machine : {host['ip']} ({host['hostname']})", "info")
-
-        discovered_ips = {h["ip"] for h in discovered}
-        for host in db.query(DiscoveredHost).all():
-            if host.ip not in discovered_ips and host.status == "up":
-                host.status = "down"
-                db_log(f"Machine inactive : {host.ip}", "warning")
-
-        db.commit()
-    except Exception as e:
-        db_log(f"Erreur mise à jour hôtes: {e}", "error")
-    finally:
-        db.close()
-
+_last_subnets: set = set()
 
 def run_network_scan():
-    """Point d'entrée du scan planifié (appelé toutes les 30 secondes)."""
-    _update_discovered_hosts(_scan_network())
+    global _last_subnets
+    discovered, subnets = _scan_network()
+    db = SessionLocal()
+    if _last_subnets and subnets != _last_subnets:
+        db.query(DiscoveredHost).delete(); db.commit()
+        db_log("Changement de réseau — hôtes réinitialisés.", "info")
+    _last_subnets = subnets; db.close()
 
+    db = SessionLocal()
+    try:
+        found = {h["ip"] for h in discovered}
+        for h in discovered:
+            ex = db.query(DiscoveredHost).filter_by(ip=h["ip"]).first()
+            if ex:
+                ex.last_seen, ex.status, ex.mac = datetime.utcnow(), "up", h["mac"]
+                if h["hostname"] != "unknown" or ex.hostname == "unknown": ex.hostname = h["hostname"]
+            else:
+                db.add(DiscoveredHost(**h, status="up"))
+                db_log(f"Nouvelle machine : {h['ip']}", "info")
+        for host in db.query(DiscoveredHost).all():
+            if host.ip not in found and host.status == "up": host.status = "down"
+        db.commit()
+    except Exception as e: db_log(f"Erreur BDD: {e}", "error")
+    finally: db.close()
 
-# ============================================================================
-# 3. CAPTEUR DHT22 (température / humidité)
-# ============================================================================
+# Capteur
+def _save_sensor(temp, humidity):
+    db = SessionLocal()
+    try: db.add(SensorData(temperature=temp, humidity=humidity)); db.commit()
+    except Exception as e: db_log(f"Erreur capteur: {e}", "error")
+    finally: db.close()
 
 def read_sensor_data():
-    """Lit température + humidité et persiste en BDD (simulation ou GPIO réel)."""
-    if SIMULATION_MODE:
-        temp = round(random.uniform(20.0, 35.0), 1)
-        humidity = round(random.uniform(30.0, 70.0), 1)
-    else:
-        db_log("Lecture physique non implémentée, valeurs par défaut.", "info")
-        temp, humidity = 22.0, 50.0
+    _save_sensor(
+        round(random.uniform(20.0, 35.0), 1) if SIMULATION_MODE else 22.0,
+        round(random.uniform(30.0, 70.0), 1) if SIMULATION_MODE else 50.0
+    )
 
-    threshold = config.get("threshold_temp", 25.0)
-    if temp > threshold:
-        db_log(f"ALERTE: Température {temp}°C dépasse le seuil ({threshold}°C)", "warning")
+# GPIO
+_dht, _gpio_ok = None, False
+GPIO_PIN = config.get("sensor", {}).get("gpio_pin", 4)
 
-    db = SessionLocal()
+def _init_gpio():
+    global _dht, _gpio_ok
+    if _gpio_ok: return _dht is not None
+    _gpio_ok = True
+    if platform.system().lower() != "linux": return False
     try:
-        db.add(SensorData(temperature=temp, humidity=humidity))
-        db.commit()
-    except Exception as e:
-        db_log(f"Erreur enregistrement capteur: {e}", "error")
-    finally:
-        db.close()
+        import adafruit_dht, board
+        _dht = adafruit_dht.DHT22({4:board.D4, 17:board.D17, 27:board.D27, 22:board.D22}.get(GPIO_PIN, board.D4), use_pulseio=False)
+        return True
+    except Exception: return False
 
+def read_sensor_data_gpio():
+    if not _init_gpio() or _dht is None: return
+    for i in range(3):
+        try:
+            t, h = _dht.temperature, _dht.humidity
+            if t is None or h is None: raise RuntimeError()
+            _save_sensor(round(t, 1), round(h, 1)); return
+        except Exception:
+            if i < 2: time.sleep(0.5)
+    db_log("DHT22 : lecture échouée.", "error")
 
-# ============================================================================
-# 4. COLLECTE SNMP
-# ============================================================================
-
-def _get_device_status(ip: str, community: str, oid: str) -> str:
-    """Interroge un équipement SNMP et retourne 'up' ou 'down'."""
-    if not SNMP_AVAILABLE:
-        return "unknown"
-    try:
-        iterator = getCmd(
-            SnmpEngine(),
-            CommunityData(community, mpModel=0),
-            UdpTransportTarget((ip, 161), timeout=2.0, retries=1),
-            ContextData(),
-            ObjectType(ObjectIdentity(oid))
-        )
-        errorIndication, errorStatus, _, _ = next(iterator)
-        return "down" if (errorIndication or errorStatus) else "up"
-    except Exception as e:
-        db_log(f"SNMP error pour {ip}: {e}", "warning")
-        return "down"
-
-
+# SNMP
 def collect_snmp_data():
-    """Interroge tous les équipements SNMP configurés et persiste leurs statuts."""
-    if not SNMP_AVAILABLE:
-        return
-    devices = config.get("devices", [])
-    community = config.get("snmp_community", "public")
+    if not SNMP_AVAILABLE: return
+    community, db = config.get("snmp_community", "public"), SessionLocal()
+    try:
+        for d in config.get("devices", []):
+            try:
+                err, es, _, _ = next(getCmd(SnmpEngine(), CommunityData(community, mpModel=0),
+                    UdpTransportTarget((d["ip"], 161), timeout=2, retries=1),
+                    ContextData(), ObjectType(ObjectIdentity(d["oid_status"]))))
+                status = "down" if (err or es) else "up"
+            except Exception: status = "down"
+            db.add(DeviceStatus(device_name=d["name"], status=status))
+        db.commit()
+    except Exception as e: db_log(f"Erreur SNMP: {e}", "error")
+    finally: db.close()
+
+# Alertes
+_alert_times = {}
+
+def _should_alert(key, cooldown=60):
+    now = time.monotonic()
+    if now - _alert_times.get(key, 0) >= cooldown:
+        _alert_times[key] = now; return True
+    return False
+
+def run_all_checks():
+    t_max = config.get("threshold_temp", 25.0)
+    h_min, h_max = config.get("threshold_humidity_low", 20.0), config.get("threshold_humidity_high", 80.0)
     db = SessionLocal()
     try:
-        for device in devices:
-            status = _get_device_status(device["ip"], community, device["oid_status"])
-            db.add(DeviceStatus(device_name=device["name"], status=status))
-            if status == "down":
-                db_log(f"Équipement {device['name']} ({device['ip']}) injoignable", "warning")
-        db.commit()
-    except Exception as e:
-        db_log(f"Erreur collecte SNMP: {e}", "error")
-    finally:
-        db.close()
+        s = db.query(SensorData).order_by(SensorData.timestamp.desc()).first()
+        if s:
+            if s.temperature > t_max and _should_alert("temp_high", 60): db_log(f"ALERTE TEMP : {s.temperature}°C > {t_max}°C", "warning")
+            elif s.temperature <= t_max: _alert_times.pop("temp_high", None)
+            if s.humidity < h_min and _should_alert("hum_low", 120): db_log(f"ALERTE HUMIDITE BASSE : {s.humidity}%", "warning")
+            elif s.humidity > h_max and _should_alert("hum_high", 120): db_log(f"ALERTE HUMIDITE HAUTE : {s.humidity}%", "warning")
+            else: _alert_times.pop("hum_low", None); _alert_times.pop("hum_high", None)
+    finally: db.close()
+
+    from sqlalchemy import func
+    db = SessionLocal()
+    try:
+        sub = db.query(DeviceStatus.device_name, func.max(DeviceStatus.timestamp).label("m")).group_by(DeviceStatus.device_name).subquery()
+        for d in db.query(DeviceStatus).join(sub, (DeviceStatus.device_name == sub.c.device_name) & (DeviceStatus.timestamp == sub.c.m)).all():
+            if d.status == "down" and _should_alert(f"dev_{d.device_name}", 300): db_log(f"{d.device_name} injoignable", "error")
+            elif d.status == "up": _alert_times.pop(f"dev_{d.device_name}", None)
+    except Exception as e: logger.error(e)
+    finally: db.close()

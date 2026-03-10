@@ -1,210 +1,123 @@
-# 🚀 Smart Monitoring RRG — Guide de Démarrage
+# Smart Monitoring RRG — Guide de démarrage
 
----
+## Prérequis
 
-## Prérequis communs
-
-| Outil | Version minimale |
-|-------|-----------------|
+| Outil | Version |
+|-------|---------|
 | Python | 3.11+ |
 | Node.js | 18+ |
 | npm | 9+ |
-| Git | n'importe laquelle |
 
 ---
 
-## 🪟 Démarrage sur Windows (développement avec VS Code)
+## Structure du projet
 
-### 1. Cloner le projet
-
-```bash
-git clone https://github.com/axeldelaro/projet-alternance.git
-cd projet-alternance/smart-monitoring-rrg
+```
+smart-monitoring-rrg/
+├── backend/
+│   ├── main.py          # API FastAPI + toutes les routes + scheduler
+│   ├── db.py            # Base de données SQLite, modèles ORM, schémas Pydantic
+│   ├── collectors.py    # Scan réseau, capteur DHT22, SNMP, alertes, mDNS
+│   ├── config.yaml      # Configuration (seuils, équipements SNMP, mode)
+│   └── requirements.txt
+└── frontend/
+    ├── index.html
+    ├── vite.config.js
+    ├── package.json
+    └── src/
+        ├── App.jsx      # Interface React complète (composants + point d'entrée)
+        └── index.css    # Styles CSS
 ```
 
-### 2. Configurer le backend
+---
 
-```bash
+## Démarrage sur Windows (développement)
+
+### 1. Backend
+
+```powershell
 cd backend
 
-# Créer un environnement virtuel Python
+# Créer et activer le venv
 python -m venv venv
-
-# Activer l'environnement (PowerShell)
 .\venv\Scripts\Activate.ps1
+
+# Si erreur "scripts désactivés" :
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 # Installer les dépendances
 pip install -r requirements.txt
-```
 
-> **Note PowerShell** : si vous obtenez une erreur `scripts désactivés`, exécutez d'abord :
-> ```powershell
-> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-> ```
-
-### 3. Vérifier la configuration
-
-Ouvrir `backend/config.yaml` et s'assurer que :
-```yaml
-simulation_mode: true   # ← obligatoire sur Windows (pas de vrai capteur)
-threshold_temp: 25.0
-```
-
-### 4. Lancer le backend
-
-```bash
-# Depuis le dossier backend/, avec le venv activé
+# Lancer le serveur (port 8000)
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-✅ L'API est disponible sur `http://localhost:8000`  
-📖 Documentation Swagger : `http://localhost:8000/docs`
+> API disponible sur `http://localhost:8000`  
+> Documentation Swagger : `http://localhost:8000/docs`
 
-### 5. Configurer le frontend
+### 2. Frontend
 
-```bash
-# Dans un nouveau terminal, depuis la racine du projet
+```powershell
+# Dans un nouveau terminal
 cd frontend
 npm install
-```
-
-### 6. Lancer le frontend
-
-```bash
 npm run dev
 ```
 
-✅ Le dashboard est disponible sur `http://localhost:5173`
+> Dashboard disponible sur `http://localhost:5173`
 
 ---
 
-### 🖥️ Ouvrir dans VS Code
-
-```bash
-# Depuis la racine du projet
-code .
-```
-
-**Extensions recommandées :**
-- Python (Microsoft)
-- Pylance
-- ES7+ React/Redux/React-Native snippets
-- Tailwind CSS IntelliSense
-- GitLens
-
-**Terminals recommandés dans VS Code :**
-- Terminal 1 : backend (`backend/` → venv activé → `uvicorn main:app --reload`)
-- Terminal 2 : frontend (`frontend/` → `npm run dev`)
-
----
-
-## 🍓 Démarrage sur Raspberry Pi (serveur de production)
+## Démarrage sur Raspberry Pi (production)
 
 ### Matériel requis
 
-- Raspberry Pi 3B+ ou 4 (recommandé)
-- Carte microSD 16 Go minimum (Classe 10)
-- Raspberry Pi OS Lite 64-bit (ou Desktop)
+- Raspberry Pi 3B+ ou 4
 - Capteur DHT22 + résistance pull-up 10 kΩ
-- Connexion réseau (Ethernet recommandé pour la stabilité)
-
-### Câblage du capteur DHT22
+- Câblage :
 
 ```
-Raspberry Pi          DHT22
-─────────────         ─────────
-Pin 1  (3.3V) ──┬──── VCC (+)
-                │
-               10kΩ  ← résistance pull-up obligatoire
-                │
-Pin 7  (GPIO4) ─┴──── DATA
-Pin 6  (GND)  ─────── GND (-)
+Pi Pin 1  (3.3V) ──┬──── VCC
+                  10kΩ
+Pi Pin 7  (GPIO4) ─┴──── DATA
+Pi Pin 6  (GND)  ─────── GND
 ```
 
-### 1. Préparer le Raspberry Pi
+### Installation
 
 ```bash
-# Mettre à jour le système
-sudo apt update && sudo apt upgrade -y
+sudo apt update && sudo apt install -y python3 python3-pip python3-venv nodejs git
 
-# Installer Python 3.11+ et pip
-sudo apt install -y python3 python3-pip python3-venv git
-
-# Installer Node.js 18
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# Activer l'interface I2C/1-Wire (pour le DHT22)
-sudo raspi-config
-# → Interface Options → 1-Wire → Activé
-```
-
-### 2. Cloner le projet
-
-```bash
-git clone https://github.com/axeldelaro/projet-alternance.git
-cd projet-alternance/smart-monitoring-rrg
-```
-
-### 3. Configurer le backend
-
-```bash
 cd backend
-
-# Créer l'environnement virtuel
 python3 -m venv venv
 source venv/bin/activate
-
-# Installer toutes les dépendances (incluant RPi.GPIO et gpiozero)
 pip install -r requirements.txt
-
-# Installer adafruit-dht pour le capteur DHT22
 pip install adafruit-circuitpython-dht
 ```
 
-### 4. Adapter la configuration
-
-Modifier `backend/config.yaml` pour la production :
+### Configuration (`backend/config.yaml`)
 
 ```yaml
-simulation_mode: false      # ← IMPORTANT : désactiver la simulation
+simulation_mode: false   # true sur Windows, false sur Pi
 sensor:
-  type: dht22
-  gpio_pin: 4               # Pin GPIO du câblage DHT22
-threshold_temp: 28.0        # Seuil d'alerte (adapter à l'environnement)
+  gpio_pin: 4
+threshold_temp: 28.0
+threshold_humidity_low: 20.0
+threshold_humidity_high: 80.0
 snmp_community: "public"
 devices:
-  - name: "Switch Principal"
+  - name: "Switch"
     ip: "192.168.1.1"
     oid_status: "1.3.6.1.2.1.1.1.0"
 ```
 
-### 5. Lancer le backend (avec droits réseau pour le scan ARP)
+### Lancer le backend (scan ARP nécessite sudo sur Linux)
 
 ```bash
-# Le scan ARP/Scapy nécessite les droits sudo sur Linux
 sudo bash -c "source venv/bin/activate && uvicorn main:app --host 0.0.0.0 --port 8000"
 ```
 
-### 6. Builder et servir le frontend
-
-```bash
-cd ../frontend
-npm install
-npm run build
-
-# Les fichiers statiques sont dans frontend/dist/
-# Les servir via le backend ou un serveur simple :
-npx serve dist -p 3000
-```
-
-✅ Dashboard accessible sur `http://<IP-DU-PI>:3000` depuis n'importe quelle machine du réseau.
-
----
-
-### 🔄 Lancement automatique au démarrage (systemd)
-
-Créer un service pour que le backend démarre automatiquement :
+### Lancement automatique (systemd)
 
 ```bash
 sudo nano /etc/systemd/system/smart-monitoring.service
@@ -212,57 +125,61 @@ sudo nano /etc/systemd/system/smart-monitoring.service
 
 ```ini
 [Unit]
-Description=Smart Monitoring RRG Backend
+Description=Smart Monitoring RRG
 After=network.target
 
 [Service]
-Type=simple
 User=root
-WorkingDirectory=/home/pi/projet-alternance/smart-monitoring-rrg/backend
-ExecStart=/home/pi/projet-alternance/smart-monitoring-rrg/backend/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+WorkingDirectory=/home/pi/smart-monitoring-rrg/backend
+ExecStart=/home/pi/smart-monitoring-rrg/backend/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
 Restart=on-failure
-RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
-# Activer et démarrer le service
 sudo systemctl enable smart-monitoring
 sudo systemctl start smart-monitoring
-
-# Vérifier le statut
-sudo systemctl status smart-monitoring
-
-# Voir les logs en direct
-sudo journalctl -fu smart-monitoring
 ```
 
 ---
 
-## ⚙️ Variables d'environnement (optionnelles)
+## Fonctionnalités
 
-| Variable | Rôle | Valeur par défaut |
-|----------|------|-------------------|
-| `VITE_API_URL` | URL de l'API backend (frontend) | `window.location.origin:8000` |
-
-Exemple pour pointer le frontend vers le Pi :
-```bash
-# Dans frontend/.env
-VITE_API_URL=http://192.168.1.50:8000
-```
+| Fonctionnalité | Description |
+|---------------|-------------|
+| Scan réseau automatique | Ping sweep + lecture ARP toutes les 30 secondes |
+| Détection changement réseau | Si le sous-réseau change, les anciens hôtes sont supprimés |
+| Résolution de noms | DNS inverse, NetBIOS (Windows), mDNS (Bonjour), fabricant OUI |
+| Capteur DHT22 | Simulation sur Windows, lecture GPIO physique sur Raspberry Pi |
+| Alertes seuils | Température et humidité avec anti-flood (cooldown configurable) |
+| SNMP | Monitoring d'équipements réseau configurés dans `config.yaml` |
+| Export logs | Bouton dans l'interface pour télécharger les logs en `.txt` |
+| Ping manuel | Bouton "ping" par hôte ou "Ping All" pour tous en parallèle |
 
 ---
 
-## 🐛 Dépannage rapide
+## Routes API
+
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| GET | `/api/sensors/latest` | Dernière mesure temp/humidité |
+| GET | `/api/sensors/history?limit=N` | Historique des mesures |
+| GET | `/api/logs?limit=N` | Journal d'événements |
+| GET | `/api/hosts` | Liste des hôtes découverts |
+| POST | `/api/hosts/{ip}/ping` | Ping d'un hôte spécifique |
+| POST | `/api/hosts/ping-all` | Ping de tous les hôtes en parallèle |
+
+---
+
+## Dépannage
 
 | Problème | Solution |
 |----------|----------|
-| `uvicorn: command not found` | Activer le venv : `source venv/bin/activate` |
-| Erreur CORS sur le frontend | Vérifier que le backend tourne sur le port 8000 |
-| Scan réseau retourne 0 hôtes | Sur Linux : relancer avec `sudo` |
-| DHT22 retourne `None` | Vérifier le câblage et la résistance 10kΩ |
-| `RPi.GPIO not found` | Vérifier que `simulation_mode: false` uniquement sur le Pi |
-| Port 8000 déjà utilisé | `lsof -i :8000` puis `kill <PID>` |
+| `uvicorn: command not found` | Activer le venv : `.\venv\Scripts\Activate.ps1` |
+| Erreur CORS | Vérifier que le backend tourne sur le port 8000 |
+| 0 hôtes détectés sur Linux | Relancer avec `sudo` |
+| DHT22 retourne None | Vérifier câblage et résistance 10kΩ |
 | `npm run dev` ne démarre pas | `cd frontend && rm -rf node_modules && npm install` |
+| Port 8000 occupé | `netstat -ano \| findstr :8000` puis arrêter le process |

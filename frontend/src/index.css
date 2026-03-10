@@ -1,3 +1,47 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: monospace; }
+
+/* Layout */
+.app        { height: 100vh; display: flex; flex-direction: column; background: #f0f0f0; overflow: hidden; }
+.app-header { background: #1e293b; color: #fff; padding: 8px 16px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+.app-title  { font-weight: bold; font-size: 15px; }
+.app-sub    { margin-left: 12px; font-size: 11px; color: #94a3b8; }
+.app-time   { font-size: 11px; color: #64748b; }
+.app-body   { flex: 1; display: grid; grid-template-columns: 220px 1fr; gap: 8px; padding: 8px; min-height: 0; }
+.col-left   { display: flex; flex-direction: column; gap: 0; }
+.col-right  { display: flex; flex-direction: column; min-height: 0; }
+
+/* Alerte */
+.alert-banner { background: #ef4444; color: #fff; padding: 8px 12px; margin-bottom: 8px; border-radius: 3px; font-weight: bold; font-size: 13px; }
+
+/* Cartes capteurs */
+.sensor-card       { border: 1px solid #ccc; border-radius: 3px; padding: 12px 16px; background: #fff; margin-bottom: 8px; }
+.sensor-card-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+.sensor-card-value { font-size: 30px; font-weight: bold; margin-top: 4px; }
+.sensor-card-unit  { font-size: 15px; color: #888; }
+
+/* Panel / Table */
+.panel         { border: 1px solid #ccc; border-radius: 3px; background: #fff; }
+.panel-header  { padding: 6px 10px; border-bottom: 1px solid #ddd; font-weight: bold; font-size: 13px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+.header-actions { display: flex; gap: 6px; align-items: center; }
+.hosts-table   { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.hosts-scroll  { overflow-y: auto; flex: 1; }
+
+table          { width: 100%; border-collapse: collapse; font-size: 12px; }
+thead tr       { background: #f5f5f5; color: #555; position: sticky; top: 0; }
+th             { padding: 5px 10px; text-align: left; font-size: 11px; text-transform: uppercase; font-weight: 600; }
+td             { padding: 4px 10px; border-top: 1px solid #eee; }
+.empty-row td  { color: #aaa; font-style: italic; text-align: center; padding: 20px; }
+.row-down      { background: #fff5f5; }
+.text-muted    { color: #999; }
+.text-mono     { font-family: monospace; }
+
+.status-up     { color: #16a34a; font-weight: bold; }
+.status-down   { color: #dc2626; font-weight: bold; }
+.ping-result   { font-size: 11px; color: #666; }
+
+/* Boutons */
+.btn    { padding: 3px 10px; font-size: 12px; font-family: monospace; border: 1px solid #999; border-radius: 3px; cursor: pointer; background: #f5f5f5; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sm { padding: 2px 7px; font-size: 11px; font-family: monospace; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; background: #fff; }
+.btn-sm:disabled { opacity: 0.4; }

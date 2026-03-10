@@ -1,99 +1,123 @@
 import React, { useState, useEffect } from 'react';
-import { TemperatureCard, HumidityCard, AlertBanner } from './components/SensorWidgets';
-import { LogsPanel, NetworkTable } from './components/NetworkWidgets';
-import HostsTable from './components/HostsTable';
+import ReactDOM from 'react-dom/client';
+import './index.css';
 
-// ---------------------------------------------------------------------------
-// API — appels vers le backend FastAPI
-// ---------------------------------------------------------------------------
-const API_BASE = (import.meta.env.VITE_API_URL ?? window.location.origin.replace(/:5173/, ':8000')) + "/api";
+const API = (import.meta.env.VITE_API_URL ?? window.location.origin.replace(/:5173/, ':8000')) + "/api";
+const get = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject());
 
-const fetchLatestSensors = () => fetch(`${API_BASE}/sensors/latest`).then(r => { if (!r.ok) throw new Error("Erreur sensors"); return r.json(); });
-const fetchDevices = () => fetch(`${API_BASE}/devices`).then(r => { if (!r.ok) throw new Error("Erreur devices"); return r.json(); });
-const fetchLogs = () => fetch(`${API_BASE}/logs`).then(r => { if (!r.ok) throw new Error("Erreur logs"); return r.json(); });
-const fetchHosts = () => fetch(`${API_BASE}/hosts`).then(r => { if (!r.ok) throw new Error("Erreur hosts"); return r.json(); });
-
-// ---------------------------------------------------------------------------
-// Application principale
-// ---------------------------------------------------------------------------
-export default function App() {
-  const [sensors, setSensors] = useState({ temperature: 0, humidity: 0 });
-  const [devices, setDevices] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [hosts, setHosts] = useState([]);
-  const [lastUpdate, setLastUpdate] = useState(null);
-
-  const REFRESH_INTERVAL = 5000;
-
-  const loadData = async () => {
-    try {
-      const [sensorData, deviceData, logData, hostData] = await Promise.all([
-        fetchLatestSensors(),
-        fetchDevices(),
-        fetchLogs(),
-        fetchHosts()
-      ]);
-      setSensors(sensorData);
-      setDevices(deviceData);
-      setLogs(logData);
-      setHosts(hostData);
-      setLastUpdate(new Date());
-    } catch (err) {
-      console.error("Erreur rafraîchissement:", err);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-    const id = setInterval(loadData, REFRESH_INTERVAL);
-    return () => clearInterval(id);
-  }, []);
-
-  return (
-    <div className="h-screen overflow-hidden flex flex-col bg-gray-50 font-mono">
-
-      {/* ── Header ── */}
-      <header className="shrink-0 border-b border-gray-200 bg-white px-5 py-3 flex items-center justify-between">
-        <div>
-          <h1 className="text-base font-bold text-gray-800 tracking-tight">📡 Supervision RRG</h1>
-          <p className="text-xs text-gray-400">Dashboard de supervision réseau</p>
-        </div>
-        <span className="text-xs text-gray-400">
-          {lastUpdate
-            ? <span>⟳ {lastUpdate.toLocaleTimeString('fr-FR')}</span>
-            : <span className="italic">connexion...</span>
-          }
-        </span>
-      </header>
-
-      {/* ── Alerte ── */}
-      <div className="shrink-0 px-4 pt-3">
-        <AlertBanner temperature={sensors.temperature} threshold={25.0} />
-      </div>
-
-      {/* ── Corps principal ── */}
-      <div className="flex-1 min-h-0 grid grid-cols-12 gap-3 p-3">
-
-        {/* Colonne gauche */}
-        <div className="col-span-3 flex flex-col gap-3 min-h-0">
-          <TemperatureCard temperature={sensors.temperature} threshold={25.0} />
-          <HumidityCard humidity={sensors.humidity} />
-          <div className="flex-1 min-h-0">
-            <LogsPanel logs={logs} />
-          </div>
-        </div>
-
-        {/* Colonne droite */}
-        <div className="col-span-9 flex flex-col gap-3 min-h-0">
-          <div className="shrink-0">
-            <NetworkTable devices={devices} />
-          </div>
-          <div className="flex-1 min-h-0">
-            <HostsTable hosts={hosts} onRefresh={loadData} />
-          </div>
-        </div>
-
-      </div>
-    </div>
-  );
+function AlertBanner({ temp }) {
+    if (temp <= 25) return null;
+    return <div className="alert-banner">Alerte temperature : {temp}°C (seuil 25°C)</div>;
 }
+
+function SensorCard({ label, value, unit }) {
+    return (
+        <div className="sensor-card">
+            <div className="sensor-card-label">{label}</div>
+            <div className="sensor-card-value">{value}<span className="sensor-card-unit"> {unit}</span></div>
+        </div>
+    );
+}
+
+function HostsTable({ hosts, onRefresh }) {
+    const [pinging, setPinging] = useState({});
+    const [pingAll, setPingAll] = useState(false);
+    const [pingResult, setPingResult] = useState(null);
+
+    const doPing = async (ip) => {
+        setPinging(p => ({ ...p, [ip]: true }));
+        try { await fetch(`${API}/hosts/${ip}/ping`, { method: 'POST' }); onRefresh?.(); }
+        catch (e) {}
+        finally { setPinging(p => ({ ...p, [ip]: false })); }
+    };
+
+    const doPingAll = async () => {
+        setPingAll(true); setPingResult(null);
+        try { const r = await fetch(`${API}/hosts/ping-all`, { method: 'POST' }); setPingResult(await r.json()); onRefresh?.(); }
+        catch (e) { setPingResult({ error: true }); }
+        finally { setPingAll(false); }
+    };
+
+    const exportLogs = async () => {
+        const logs = await get(`${API}/logs?limit=1000`);
+        const txt = logs.map(l => `${new Date(l.timestamp).toLocaleString('fr-FR')} [${l.level.toUpperCase()}] ${l.message}`).join('\n');
+        const a = Object.assign(document.createElement('a'), {
+            href: URL.createObjectURL(new Blob([txt], { type: 'text/plain' })),
+            download: `logs-${new Date().toISOString().slice(0, 10)}.txt`
+        });
+        a.click();
+    };
+
+    const up = hosts.filter(h => h.status === 'up').length;
+    return (
+        <div className="panel hosts-table">
+            <div className="panel-header">
+                <span>Machines detectees — {hosts.length} &nbsp;
+                    <span className="status-up">{up} up</span> / <span className="status-down">{hosts.length - up} down</span>
+                </span>
+                <span className="header-actions">
+                    {pingResult && !pingResult.error && <span className="ping-result">{pingResult.up}/{pingResult.total} repondent</span>}
+                    <button className="btn" onClick={exportLogs}>Exporter logs</button>
+                    <button className="btn" onClick={doPingAll} disabled={pingAll || !hosts.length}>{pingAll ? 'en cours...' : 'Ping All'}</button>
+                </span>
+            </div>
+            <div className="hosts-scroll">
+                <table className="text-mono">
+                    <thead><tr><th>IP</th><th>MAC</th><th>Nom</th><th>Statut</th><th>Vu</th><th></th></tr></thead>
+                    <tbody>
+                        {hosts.map(h => (
+                            <tr key={h.ip} className={h.status === 'down' ? 'row-down' : ''}>
+                                <td><strong>{h.ip}</strong></td>
+                                <td className="text-muted">{h.mac}</td>
+                                <td>{h.hostname}</td>
+                                <td><span className={`status-${h.status}`}>{h.status}</span></td>
+                                <td className="text-muted">{new Date(h.last_seen).toLocaleTimeString('fr-FR')}</td>
+                                <td><button className="btn-sm" onClick={() => doPing(h.ip)} disabled={pinging[h.ip]}>{pinging[h.ip] ? '...' : 'ping'}</button></td>
+                            </tr>
+                        ))}
+                        {!hosts.length && <tr className="empty-row"><td colSpan={6}>scan en cours...</td></tr>}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+function App() {
+    const [sensors, setSensors] = useState({ temperature: 0, humidity: 0 });
+    const [hosts, setHosts]     = useState([]);
+    const [lastUpdate, setLastUpdate] = useState(null);
+
+    const load = async () => {
+        try {
+            const [s, h] = await Promise.all([get(`${API}/sensors/latest`), get(`${API}/hosts`)]);
+            setSensors(s); setHosts(h); setLastUpdate(new Date());
+        } catch (e) {}
+    };
+
+    useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, []);
+
+    return (
+        <div className="app">
+            <header className="app-header">
+                <div>
+                    <span className="app-title">Supervision RRG</span>
+                    <span className="app-sub">Dashboard de monitoring reseau</span>
+                </div>
+                <span className="app-time">{lastUpdate ? `maj : ${lastUpdate.toLocaleTimeString('fr-FR')}` : 'connexion...'}</span>
+            </header>
+            <div className="app-body">
+                <div className="col-left">
+                    <AlertBanner temp={sensors.temperature} />
+                    <SensorCard label="Temperature" value={sensors.temperature} unit="°C" />
+                    <SensorCard label="Humidite" value={sensors.humidity} unit="%" />
+                </div>
+                <div className="col-right">
+                    <HostsTable hosts={hosts} onRefresh={load} />
+                </div>
+            </div>
+        </div>
+    );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>);

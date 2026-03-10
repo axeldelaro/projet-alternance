@@ -1,89 +1,49 @@
-"""
-db.py — Couche données complète :
-  - Configuration YAML (config.yaml)
-  - Connexion SQLAlchemy (engine, SessionLocal, Base, get_db)
-  - Modèles ORM (SensorData, DeviceStatus, Log, DiscoveredHost)
-  - Schémas Pydantic de réponse
-  - Utilitaire de log BDD (db_log)
-"""
-import logging
-import yaml
+import logging, yaml
 from pathlib import Path
 from datetime import datetime
-
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 from pydantic import BaseModel, ConfigDict
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-config: dict = {}
 try:
-    _config_path = Path(__file__).parent / "config.yaml"
-    with open(_config_path, "r") as _f:
-        config = yaml.safe_load(_f) or {}
+    with open(Path(__file__).parent / "config.yaml") as f:
+        config = yaml.safe_load(f) or {}
 except FileNotFoundError:
-    pass  # config vide par défaut, les valeurs par défaut gèrent ce cas
+    config = {}
 
-# ---------------------------------------------------------------------------
-# Connexion
-# ---------------------------------------------------------------------------
-
-SQLALCHEMY_DATABASE_URL = "sqlite:///./monitoring.db"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
+engine = create_engine("sqlite:///./monitoring.db", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-
 def get_db():
     db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# ---------------------------------------------------------------------------
-# Modèles ORM
-# ---------------------------------------------------------------------------
+    try: yield db
+    finally: db.close()
 
 class SensorData(Base):
     __tablename__ = "sensor_data"
-
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     temperature = Column(Float)
     humidity = Column(Float)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-
 class DeviceStatus(Base):
     __tablename__ = "device_status"
-
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     device_name = Column(String)
     status = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-
 class Log(Base):
     __tablename__ = "logs"
-
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     message = Column(String)
     level = Column(String, default="info")
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-
 class DiscoveredHost(Base):
     __tablename__ = "discovered_hosts"
-
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     ip = Column(String, unique=True)
     mac = Column(String)
     hostname = Column(String)
@@ -91,48 +51,26 @@ class DiscoveredHost(Base):
     first_seen = Column(DateTime, default=datetime.utcnow)
     last_seen = Column(DateTime, default=datetime.utcnow)
 
-
-# ---------------------------------------------------------------------------
-# Schémas Pydantic
-# ---------------------------------------------------------------------------
+_cfg = ConfigDict(from_attributes=True)
 
 class SensorDataResponse(BaseModel):
-    timestamp: datetime
-    temperature: float
-    humidity: float
-    model_config = ConfigDict(from_attributes=True)
-
+    timestamp: datetime; temperature: float; humidity: float
+    model_config = _cfg
 
 class DeviceStatusResponse(BaseModel):
-    device_name: str
-    status: str
-    timestamp: datetime
-    model_config = ConfigDict(from_attributes=True)
-
+    device_name: str; status: str; timestamp: datetime
+    model_config = _cfg
 
 class LogResponse(BaseModel):
-    timestamp: datetime
-    message: str
-    level: str
-    model_config = ConfigDict(from_attributes=True)
-
-
-# ---------------------------------------------------------------------------
-# Logger BDD
-# ---------------------------------------------------------------------------
+    timestamp: datetime; message: str; level: str
+    model_config = _cfg
 
 logging.basicConfig(level=logging.INFO)
-_logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
-
-def db_log(message: str, level: str = "info"):
-    """Écrit dans la console ET persiste le log en base de données."""
-    getattr(_logger, level, _logger.info)(message)
+def db_log(msg: str, level: str = "info"):
+    getattr(_log, level, _log.info)(msg)
     db = SessionLocal()
-    try:
-        db.add(Log(message=message, level=level))
-        db.commit()
-    except Exception as e:
-        _logger.error(f"Erreur log BDD: {e}")
-    finally:
-        db.close()
+    try: db.add(Log(message=msg, level=level)); db.commit()
+    except Exception as e: _log.error(e)
+    finally: db.close()
