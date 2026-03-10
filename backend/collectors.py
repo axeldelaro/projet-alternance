@@ -1,6 +1,8 @@
 import random, subprocess, socket, ipaddress, platform, re, time, logging, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import Any
+from sqlalchemy import func  # type: ignore[import-untyped]
 from db import SessionLocal, SensorData, DeviceStatus, DiscoveredHost, db_log, config
 
 logger = logging.getLogger(__name__)
@@ -119,10 +121,10 @@ def _resolve_hostname(ip, mac=""):
         except Exception: pass
     return "unknown"
 
-def _ping_win(ip):
+def _ping_win(ip: str) -> bool:
     return subprocess.run(["ping","-n","1","-w","300",ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
-def _resolve(h):
+def _resolve(h: dict) -> None:
     h["hostname"] = _resolve_hostname(h["ip"], h["mac"])
 
 def _scan_network():
@@ -133,7 +135,7 @@ def _scan_network():
             try:
                 net = ipaddress.IPv4Network(subnet, strict=False)
                 with ThreadPoolExecutor(max_workers=64) as ex:
-                    list(as_completed({ex.submit(_ping_win, str(h)): h for h in net.hosts()}))
+                    list(as_completed({ex.submit(_ping_win, str(h)): h for h in net.hosts()}))  # type: ignore[arg-type]
                 out = subprocess.check_output(["arp","-a"], encoding="cp850", errors="ignore")
                 for ip, mac, _ in re.findall(r"^\s*([\d\.]+)\s+([0-9a-fA-F\-]+)\s+(dynamic|dynamique)", out, re.IGNORECASE|re.MULTILINE):
                     try:
@@ -150,7 +152,7 @@ def _scan_network():
 
     result = list(discovered.values())
     with ThreadPoolExecutor(max_workers=32) as ex:
-        list(as_completed(ex.submit(_resolve, h) for h in result))
+        list(as_completed(ex.submit(_resolve, h) for h in result))  # type: ignore[arg-type]
     db_log(f"Scan terminé : {len(result)} hôte(s).", "info")
     return result, set(subnets)
 
@@ -189,10 +191,10 @@ def _save_sensor(temp, humidity):
     except Exception as e: db_log(f"Erreur capteur: {e}", "error")
     finally: db.close()
 
-def read_sensor_data():
+def read_sensor_data() -> None:
     _save_sensor(
-        round(random.uniform(20.0, 35.0), 1) if SIMULATION_MODE else 22.0,
-        round(random.uniform(30.0, 70.0), 1) if SIMULATION_MODE else 50.0
+        round(float(random.uniform(20.0, 35.0)), 1) if SIMULATION_MODE else 22.0,
+        round(float(random.uniform(30.0, 70.0)), 1) if SIMULATION_MODE else 50.0
     )
 
 # GPIO
@@ -210,8 +212,9 @@ def _init_gpio():
         return True
     except Exception: return False
 
-def read_sensor_data_gpio():
+def read_sensor_data_gpio() -> None:
     if not _init_gpio() or _dht is None: return
+    assert _dht is not None
     for i in range(3):
         try:
             t, h = _dht.temperature, _dht.humidity
@@ -239,7 +242,7 @@ def collect_snmp_data():
     finally: db.close()
 
 # Alertes
-_alert_times = {}
+_alert_times: dict[str, float] = {}
 
 def _should_alert(key, cooldown=60):
     now = time.monotonic()
@@ -261,7 +264,6 @@ def run_all_checks():
             else: _alert_times.pop("hum_low", None); _alert_times.pop("hum_high", None)
     finally: db.close()
 
-    from sqlalchemy import func
     db = SessionLocal()
     try:
         sub = db.query(DeviceStatus.device_name, func.max(DeviceStatus.timestamp).label("m")).group_by(DeviceStatus.device_name).subquery()
