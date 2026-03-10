@@ -1,42 +1,40 @@
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from fastapi import FastAPI, APIRouter, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, ConfigDict
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from db import Base, engine, config, get_db, SessionLocal
 from db import SensorData, DeviceStatus, Log, DiscoveredHost
-from db import SensorDataResponse, DeviceStatusResponse, LogResponse, db_log
+from db import SensorDataResponse, DeviceStatusResponse, LogResponse, DiscoveredHostResponse, db_log
 from collectors import run_network_scan, start_mdns_listener, stop_mdns_listener
-from collectors import collect_snmp_data, read_sensor_data, read_sensor_data_gpio, run_all_checks
+from collectors import collect_snmp_data, read_sensor_data, read_sensor_data_gpio, run_all_checks, ping_host
 
 SIMULATION_MODE = config.get("simulation_mode", True)
 _sensor_fn = read_sensor_data if SIMULATION_MODE else read_sensor_data_gpio
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Smart Monitoring RRG")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
-
 scheduler = BackgroundScheduler()
 
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     start_mdns_listener()
     scheduler.add_job(run_network_scan, 'interval', seconds=30, max_instances=1, coalesce=True)
     scheduler.add_job(lambda: (collect_snmp_data(), _sensor_fn(), run_all_checks()), 'interval', seconds=5, max_instances=1, coalesce=True)
     scheduler.start()
     scheduler.add_job(run_network_scan, 'date')
-
-@app.on_event("shutdown")
-def shutdown():
+    yield
     stop_mdns_listener()
     scheduler.shutdown()
+
+app = FastAPI(title="Smart Monitoring RRG", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
 def root():
@@ -58,18 +56,12 @@ def get_logs(limit: int = 50, db: Session = Depends(get_db)):
     return db.query(Log).order_by(Log.timestamp.desc()).limit(limit).all()
 
 # Hosts
-class DiscoveredHostResponse(BaseModel):
-    id: int; ip: str; mac: str; hostname: str; status: str
-    first_seen: datetime; last_seen: datetime
-    model_config = ConfigDict(from_attributes=True)
-
 @app.get("/api/hosts", response_model=List[DiscoveredHostResponse])
 def get_hosts(db: Session = Depends(get_db)):
     return db.query(DiscoveredHost).order_by(DiscoveredHost.last_seen.desc()).all()
 
 @app.post("/api/hosts/{ip}/ping")
 def ping_one(ip: str, db: Session = Depends(get_db)):
-    from collectors import ping_host
     host = db.query(DiscoveredHost).filter_by(ip=ip).first()
     if not host:
         raise HTTPException(404, f"Hôte {ip} inconnu")
@@ -80,7 +72,6 @@ def ping_one(ip: str, db: Session = Depends(get_db)):
 
 @app.post("/api/hosts/ping-all")
 def ping_all(db: Session = Depends(get_db)):
-    from collectors import ping_host
     hosts = db.query(DiscoveredHost).all()
     if not hosts:
         return {"total": 0, "up": 0, "down": 0, "results": []}

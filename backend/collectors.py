@@ -119,6 +119,12 @@ def _resolve_hostname(ip, mac=""):
         except Exception: pass
     return "unknown"
 
+def _ping_win(ip):
+    return subprocess.run(["ping","-n","1","-w","300",ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+def _resolve(h):
+    h["hostname"] = _resolve_hostname(h["ip"], h["mac"])
+
 def _scan_network():
     subnets, discovered = _get_subnets(), {}
     for subnet in subnets:
@@ -126,8 +132,8 @@ def _scan_network():
         if IS_WIN or not SCAPY_AVAILABLE:
             try:
                 net = ipaddress.IPv4Network(subnet, strict=False)
-                def _p(ip): return ip if subprocess.run(["ping","-n","1","-w","300",ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0 else None
-                with ThreadPoolExecutor(max_workers=64) as ex: list(as_completed({ex.submit(_p, str(h)): h for h in net.hosts()}))
+                with ThreadPoolExecutor(max_workers=64) as ex:
+                    list(as_completed({ex.submit(_ping_win, str(h)): h for h in net.hosts()}))
                 out = subprocess.check_output(["arp","-a"], encoding="cp850", errors="ignore")
                 for ip, mac, _ in re.findall(r"^\s*([\d\.]+)\s+([0-9a-fA-F\-]+)\s+(dynamic|dynamique)", out, re.IGNORECASE|re.MULTILINE):
                     try:
@@ -144,7 +150,7 @@ def _scan_network():
 
     result = list(discovered.values())
     with ThreadPoolExecutor(max_workers=32) as ex:
-        list(as_completed([ex.submit(lambda h: h.update(hostname=_resolve_hostname(h["ip"], h["mac"])) or h, h) for h in result]))
+        list(as_completed(ex.submit(_resolve, h) for h in result))
     db_log(f"Scan terminé : {len(result)} hôte(s).", "info")
     return result, set(subnets)
 

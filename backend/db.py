@@ -65,6 +65,11 @@ class LogResponse(BaseModel):
     timestamp: datetime; message: str; level: str
     model_config = _cfg
 
+class DiscoveredHostResponse(BaseModel):
+    id: int; ip: str; mac: str; hostname: str; status: str
+    first_seen: datetime; last_seen: datetime
+    model_config = _cfg
+
 logging.basicConfig(level=logging.INFO)
 _log = logging.getLogger(__name__)
 
