@@ -1,6 +1,4 @@
-# Smart Monitoring RRG — Guide de démarrage
-
-## Prérequis
+Prérequis
 
 | Outil | Version |
 |-------|---------|
@@ -10,7 +8,7 @@
 
 ---
 
-## Structure du projet
+Structure du projet
 
 ```
 smart-monitoring-rrg/
@@ -27,50 +25,45 @@ smart-monitoring-rrg/
     └── src/
         ├── App.jsx      # Interface React complète (composants + point d'entrée)
         └── index.css    # Styles CSS
-```
+
 
 ---
 
-## Démarrage sur Windows (développement)
+Démarrage sur Windows (développement)
 
-### 1. Backend
+1. Backend
 
-```powershell
+
 cd backend
 
-# Créer et activer le venv
+Créer et activer le venv
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 
-# Si erreur "scripts désactivés" :
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
-# Installer les dépendances
+Installer les dépendances
 pip install -r requirements.txt
 
-# Lancer le serveur (port 8000)
+Lancer le serveur (port 8000)
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
 
-> API disponible sur `http://localhost:8000`  
-> Documentation Swagger : `http://localhost:8000/docs`
 
-### 2. Frontend
+> API disponible sur `http://localhost:8000`
 
-```powershell
-# Dans un nouveau terminal
+2. Frontend
+
+Dans un nouveau terminal
 cd frontend
 npm install
 npm run dev
-```
+
 
 > Dashboard disponible sur `http://localhost:5173`
 
 ---
+ Démarrage sur Raspberry Pi (production)
 
-## Démarrage sur Raspberry Pi (production)
-
-### Matériel requis
+Matériel requis
 
 - Raspberry Pi 3B+ ou 4
 - Capteur DHT22 + résistance pull-up 10 kΩ
@@ -83,9 +76,9 @@ Pi Pin 7  (GPIO4) ─┴──── DATA
 Pi Pin 6  (GND)  ─────── GND
 ```
 
-### Installation
+Installation
 
-```bash
+
 sudo apt update && sudo apt install -y python3 python3-pip python3-venv nodejs git
 
 cd backend
@@ -93,11 +86,11 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 pip install adafruit-circuitpython-dht
-```
 
-### Configuration (`backend/config.yaml`)
 
-```yaml
+Configuration (`backend/config.yaml`)
+
+yaml
 simulation_mode: false   # true sur Windows, false sur Pi
 sensor:
   gpio_pin: 4
@@ -109,21 +102,21 @@ devices:
   - name: "Switch"
     ip: "192.168.1.1"
     oid_status: "1.3.6.1.2.1.1.1.0"
-```
 
-### Lancer le backend (scan ARP nécessite sudo sur Linux)
 
-```bash
+Lancer le backend (scan ARP nécessite sudo sur Linux)
+
+
 sudo bash -c "source venv/bin/activate && uvicorn main:app --host 0.0.0.0 --port 8000"
-```
 
-### Lancement automatique (systemd)
 
-```bash
+Lancement automatique (systemd)
+
+bash
 sudo nano /etc/systemd/system/smart-monitoring.service
-```
 
-```ini
+
+ini
 [Unit]
 Description=Smart Monitoring RRG
 After=network.target
@@ -136,16 +129,14 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
-```
 
-```bash
+
+bash
 sudo systemctl enable smart-monitoring
 sudo systemctl start smart-monitoring
-```
 
----
 
-## Fonctionnalités
+Fonctionnalités
 
 | Fonctionnalité | Description |
 |---------------|-------------|
@@ -153,14 +144,14 @@ sudo systemctl start smart-monitoring
 | Détection changement réseau | Si le sous-réseau change, les anciens hôtes sont supprimés |
 | Résolution de noms | DNS inverse, NetBIOS (Windows), mDNS (Bonjour), fabricant OUI |
 | Capteur DHT22 | Simulation sur Windows, lecture GPIO physique sur Raspberry Pi |
-| Alertes seuils | Température et humidité avec anti-flood (cooldown configurable) |
+| Alertes seuils | Température et humidité avec anti-flood |
 | SNMP | Monitoring d'équipements réseau configurés dans `config.yaml` |
 | Export logs | Bouton dans l'interface pour télécharger les logs en `.txt` |
 | Ping manuel | Bouton "ping" par hôte ou "Ping All" pour tous en parallèle |
 
 ---
 
-## Routes API
+Routes API
 
 | Méthode | Route | Description |
 |---------|-------|-------------|
@@ -173,7 +164,7 @@ sudo systemctl start smart-monitoring
 
 ---
 
-## Dépannage
+Dépannage
 
 | Problème | Solution |
 |----------|----------|
